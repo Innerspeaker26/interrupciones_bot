@@ -1,0 +1,19 @@
+# Secretos: la clave de la API vive aqui y NUNCA debe subir al repositorio
+.env
+
+# Entorno virtual y caches
+.venv/
+__pycache__/
+*.pyc
+
+# Datos pesados (el crudo se regenera con descargar_interrupciones.py)
+data_raw/
+logs/
+data/backup_*/
+
+# Artefactos que no necesita el despliegue
+copias_backup_*/
+*.zip
+*.mp4
+/interrupciones_lima.parquet
+/interrupciones_limpio.parquet

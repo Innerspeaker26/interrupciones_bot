@@ -1,0 +1,12 @@
+{
+  "generado": "12/08/2026 00:47",
+  "archivo_origen": "interrupciones_semaforo_260809_1829.gdb",
+  "flag_utc": false,
+  "registros_crudos": 1355,
+  "registros": 1355,
+  "con_geometria": 1321,
+  "provincias": 56,
+  "distritos": 160,
+  "control_cerro_azul": "06:00",
+  "zona_horaria_ok": true
+}

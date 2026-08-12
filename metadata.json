@@ -1,0 +1,12 @@
+{
+  "generado": "28/07/2026 14:32",
+  "archivo_origen": "interrupciones_lima.parquet",
+  "flag_utc": false,
+  "registros_crudos": 8166,
+  "registros": 8166,
+  "con_geometria": 6940,
+  "provincias": 5,
+  "distritos": 63,
+  "control_cerro_azul": "06:00",
+  "zona_horaria_ok": true
+}

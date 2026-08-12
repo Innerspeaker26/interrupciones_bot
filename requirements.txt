@@ -1,0 +1,32 @@
+# GeoAgente de interrupciones de agua - Lima (version ajustada)
+# Python 3.12 (mismo que el repo del curso: ver .python-version de GeoAgent)
+#
+#   python -m venv .venv
+#   .\.venv\Scripts\Activate.ps1
+#   pip install -r requirements.txt
+#
+# Antes de correr la app, prepara la base (una sola vez, o cuando haya data nueva):
+#   python preparar_datos.py
+
+# --- Stack del agente (igual que el pyproject del curso) ---
+deepagents>=0.6.3
+langchain>=1.0.5
+langchain-openai>=1.3.5      # cliente compatible OpenAI -> LM Studio local
+langgraph>=1.0               # trae langgraph.checkpoint.memory.InMemorySaver
+pydantic>=2                  # output estructurado
+python-dotenv
+
+# --- Datos geoespaciales ---
+geopandas>=1.1
+shapely>=2.0
+pandas>=2.3
+pyarrow>=15.0                # motor para leer el .parquet
+
+# --- UI ---
+streamlit>=1.57
+folium>=0.20
+streamlit-folium>=0.27.3     # renderiza el mapa dentro del chat
+streamlit-geolocation>=0.0.10  # pide al navegador la ubicacion del ciudadano
+
+# --- Notebook demo (opcional) ---
+ipykernel
