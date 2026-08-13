@@ -137,6 +137,7 @@ if ERROR is not None:
 from tools import (  # noqa: E402  (despues del st.stop para no fallar dos veces)
     clear_session_data,
     construir_mapa,
+    diagnostico_datos,
     get_session_data,
     listar_distritos,
     listar_provincias,
@@ -200,7 +201,9 @@ with st.sidebar:
     st.caption("💡 O haz clic en el mapa, o escribe tu distrito en el chat.")
 
     st.divider()
-    d = CTX["diag"]
+    # En vivo (no el diag cacheado de CTX): la base se refresca desde el Drive
+    # cada 15 min y estos contadores deben reflejarla sin reiniciar la app.
+    d = diagnostico_datos()
     st.markdown("### ⚙️ Estado del sistema")
     st.caption(f"{d['registros']:,} interrupciones · {d['distritos']} distritos · "
                f"{d['provincias']} provincias · 🕐 {d['ahora_lima']}")

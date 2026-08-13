@@ -34,9 +34,17 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 PARQUET_LIMPIO = DATA_DIR / "interrupciones_limpio.parquet"
 METADATA = DATA_DIR / "metadata.json"
 
+# Copia fija del Drive que la tarea programada sobrescribe cada 15 minutos
+# (descargar_interrupciones.py -> publicar_en_drive). El ID no cambia entre
+# corridas, asi que este enlace siempre apunta a la base mas fresca. La app
+# (local o en Streamlit Cloud) la baja de aqui; si falla, usa data/ local.
+DRIVE_FILE_ID = "1sukL7Bbz1dvhdOpwzSJlRUaTBrYGG3H2"
+URL_BASE_DRIVE = f"https://drive.google.com/uc?export=download&id={DRIVE_FILE_ID}"
+TTL_BASE_SEG = 15 * 60          # mismo ritmo que la tarea programada
+
 # --------------------------------------------------------------------------- #
 # Estado compartido
-#   _BASE_CACHE: el parquet ya cargado (no cambia en toda la sesion).
+#   _BASE_CACHE: el parquet cargado + cuando se cargo (se refresca por TTL).
 #   _SESSION_DATA: lo propio de la consulta actual — punto ubicado, filas
 #   coincidentes y la evidencia contra la que verifican los guardarrailes.
 # --------------------------------------------------------------------------- #
@@ -79,17 +87,59 @@ def _fecha(x) -> str:
 # --------------------------------------------------------------------------- #
 # Carga (la base ya viene limpia)
 # --------------------------------------------------------------------------- #
+def _leer_parquet_drive():
+    """Baja la copia fija del Drive. Devuelve None si no se pudo (sin internet,
+    Drive caido, permiso revocado): el llamador cae a la copia local."""
+    import io
+
+    import requests
+
+    try:
+        r = requests.get(URL_BASE_DRIVE, timeout=20)
+        r.raise_for_status()
+        # Un enlace sin permiso devuelve HTML, no parquet: mejor detectarlo
+        # aqui que cachear basura.
+        if not r.content.startswith(b"PAR1"):
+            raise ValueError("la respuesta no es un parquet (¿permiso del enlace?)")
+        gdf = gpd.read_parquet(io.BytesIO(r.content))
+        print(f"[base] Refrescada desde el Drive: {len(gdf):,} registros.")
+        return gdf
+    except Exception as e:  # noqa: BLE001
+        print(f"[base] Drive no disponible ({type(e).__name__}: {e}); se usa la copia local.")
+        return None
+
+
 def cargar_base() -> gpd.GeoDataFrame:
     """Todos los registros, incluidos los ~15% sin poligono (cuentan para la
-    consulta por distrito, no para el cruce espacial)."""
-    if "base" not in _BASE_CACHE:
+    consulta por distrito, no para el cruce espacial).
+
+    La base viva esta en el Drive (la tarea programada la republica cada 15
+    min): se baja de ahi y se refresca por TTL, sin reiniciar la app ni cortar
+    las sesiones de chat. El parquet local de data/ es el respaldo."""
+    import time
+
+    ahora = time.time()
+    if "base" in _BASE_CACHE and ahora - _BASE_CACHE.get("ts", 0) < TTL_BASE_SEG:
+        return _BASE_CACHE["base"]
+
+    gdf = _leer_parquet_drive()
+    if gdf is None:
+        if "base" in _BASE_CACHE:
+            # Sin conexion pero con base previa: seguir con ella y reintentar
+            # el Drive cuando venza el proximo TTL.
+            _BASE_CACHE["ts"] = ahora
+            return _BASE_CACHE["base"]
         if not PARQUET_LIMPIO.is_file():
             raise FileNotFoundError(
-                f"No existe la base limpia ({PARQUET_LIMPIO}). "
-                "Genera con: python preparar_datos.py"
+                f"No se pudo bajar la base del Drive y tampoco existe la copia "
+                f"local ({PARQUET_LIMPIO}). Genera con: python preparar_datos.py"
             )
-        _BASE_CACHE["base"] = gpd.read_parquet(PARQUET_LIMPIO)
-    return _BASE_CACHE["base"]
+        gdf = gpd.read_parquet(PARQUET_LIMPIO)
+
+    _BASE_CACHE["base"] = gdf
+    _BASE_CACHE["ts"] = ahora
+    _BASE_CACHE.pop("espacial", None)   # derivado de la base: se invalida junto
+    return gdf
 
 
 def cargar_base_espacial() -> gpd.GeoDataFrame:
