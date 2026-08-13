@@ -9,6 +9,13 @@ interrupciones que aun no terminan -- se preservan aunque sean mas antiguas que
 la ventana -- y las iniciadas en los ultimos VENTANA_DIAS dias. Asi se bajan
 ~1,300 filas en segundos en vez de las ~30,000 de la base completa.
 
+Al final, la base limpia se publica en la carpeta del Drive (CARPETA_DRIVE)
+con el patron de MOREA: copia con fecha + copia fija `interrupciones_limpio_
+latest.parquet` que conserva su ID de Drive entre corridas.
+
+Automatizacion: actualizar_base.bat envuelve este script para el Programador
+de tareas de Windows (registro en logs/actualizar_base.log).
+
     python descargar_interrupciones.py              # descarga y prepara la base
     python descargar_interrupciones.py --solo-descargar
 
@@ -34,6 +41,7 @@ avisa si el supuesto deja de cumplirse.
 """
 
 import argparse
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -52,6 +60,16 @@ PORTAL_URL = "https://geosunass.sunass.gob.pe/gisportal"
 # El crudo se deja donde preparar_datos.py lo busca por defecto.
 BASE_DIR = Path(__file__).resolve().parent
 CARPETA_DESTINO = BASE_DIR / "data_raw"
+
+# Carpeta del Drive (sincronizada con Google Drive Desktop) donde se publica la
+# base limpia tras cada corrida, con el mismo patron que MOREA: una copia con
+# fecha (historial) y una copia de NOMBRE FIJO que se sobrescribe -- al
+# conservar el mismo archivo (mismo ID de Drive), una app en la nube puede
+# bajarla siempre desde el mismo enlace.
+CARPETA_DRIVE = Path(r"G:\Mi unidad\data_interrupciones_bot")
+NOMBRE_FIJO = "interrupciones_limpio_latest.parquet"
+PARQUET_LIMPIO = BASE_DIR / "data" / "interrupciones_limpio.parquet"
+METADATA_LIMPIA = BASE_DIR / "data" / "metadata.json"
 
 # ID del formulario de Survey123: "FORMULARIO N002 Prueba Semaforo"
 SURVEY_ITEM_ID = "3bc0e99719754f1b902266f8efc0821c"
@@ -144,6 +162,12 @@ def exportar(gis, item, nombre, carpeta):
         shutil.rmtree(extraccion, ignore_errors=True)
         ruta_zip.unlink()
         print(f"     Guardado en: {destino}")
+
+        # Retencion en data_raw: cada corrida deja un .gdb (~3 MB) y a ritmo
+        # de 15 min serian ~340 MB/dia. Se conservan solo los 5 mas recientes.
+        gdbs = sorted(carpeta.glob(f"{nombre}_*.gdb"))
+        for viejo in gdbs[:-5]:
+            shutil.rmtree(viejo, ignore_errors=True)
         return destino
     finally:
         # Solo se borra el item de export recien creado por este script (por
@@ -152,6 +176,37 @@ def exportar(gis, item, nombre, carpeta):
             export_item.delete()
         except Exception as e:
             print(f"     (Aviso) No se pudo borrar el item temporal: {e}")
+
+
+def publicar_en_drive() -> None:
+    """Copia la base limpia recien generada a la carpeta del Drive: una copia
+    con fecha y la copia fija que sobreescribe (patron survey_morea_latest).
+    Si el Drive no esta montado, avisa sin tumbar la corrida: la base local
+    quedo bien y la publicacion se recupera en la siguiente ejecucion."""
+    if not PARQUET_LIMPIO.exists():
+        print("  (Aviso) No hay base limpia que publicar en el Drive.")
+        return
+    try:
+        CARPETA_DRIVE.mkdir(parents=True, exist_ok=True)
+        historico = CARPETA_DRIVE / f"interrupciones_limpio_{FECHA}.parquet"
+        shutil.copyfile(PARQUET_LIMPIO, historico)
+        latest = CARPETA_DRIVE / NOMBRE_FIJO
+        shutil.copyfile(PARQUET_LIMPIO, latest)
+        if METADATA_LIMPIA.exists():
+            shutil.copyfile(METADATA_LIMPIA, CARPETA_DRIVE / "metadata.json")
+        print(f"  -> Publicado en Drive: {historico.name} + {NOMBRE_FIJO}")
+
+        # Retencion: corriendo cada 15 min serian ~96 copias/dia (~400 MB).
+        # Se conservan solo las ultimas MAX_HISTORICOS con fecha; la copia
+        # fija (latest) nunca se toca.
+        MAX_HISTORICOS = 30
+        fechados = sorted(CARPETA_DRIVE.glob("interrupciones_limpio_2*.parquet"))
+        for viejo in fechados[:-MAX_HISTORICOS]:
+            viejo.unlink(missing_ok=True)
+        if len(fechados) > MAX_HISTORICOS:
+            print(f"     Retencion: {len(fechados) - MAX_HISTORICOS} copia(s) antigua(s) eliminada(s).")
+    except Exception as e:  # G: sin montar, sin espacio, etc.
+        print(f"  (Aviso) No se pudo publicar en el Drive: {e}")
 
 
 def preparar_base(ruta_crudo: Path) -> bool:
@@ -196,7 +251,9 @@ def main():
     if args.solo_descargar:
         print("\n  Crudo descargado. Para generar la base limpia:")
         print(f"    python preparar_datos.py --entrada \"{ruta}\" --utc")
-    elif not preparar_base(ruta):
+    elif preparar_base(ruta):
+        publicar_en_drive()
+    else:
         print("\n  [ALERTA] La preparación falló. Revisa el error de arriba y corre:")
         print(f"    python preparar_datos.py --entrada \"{ruta}\" --utc")
 
