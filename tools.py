@@ -176,17 +176,36 @@ def listar_distritos(provincia: str = "") -> list[str]:
 # --------------------------------------------------------------------------- #
 # Filtros temporales (la logica de negocio)
 # --------------------------------------------------------------------------- #
-def _activas_ahora(df: pd.DataFrame) -> pd.DataFrame:
-    """Imprevistas ocurriendo ahora: inicio <= ahora <= fin_estimado."""
+def _en_curso(df: pd.DataFrame, tipo: str = "") -> pd.DataFrame:
+    """Cortes con el servicio INTERRUMPIDO en este instante, sean imprevistos o
+    programados: inicio <= ahora <= fin_estimado. Con `tipo` se filtra a uno solo.
+
+    Para el ciudadano lo que importa es si tiene agua, no si el corte estaba
+    previsto: un corte programado ya iniciado lo deja sin servicio igual que uno
+    imprevisto. Antes esos casos no aparecian en ningun conteo (no eran
+    "imprevistas activas" ni "programadas por empezar") y la app respondia que no
+    habia nada mientras la zona estaba sin agua."""
     ahora = _ahora()
-    return df[(df["tipo"] == "IMPREVISTA")
-              & (df["situacion"] == "SERVICIO INTERRUMPIDO")
-              & (df["inicio"] <= ahora)
-              & (ahora <= df["fin_estimado"])]
+    m = ((df["situacion"] == "SERVICIO INTERRUMPIDO")
+         & (df["inicio"] <= ahora)
+         & (ahora <= df["fin_estimado"]))
+    if tipo:
+        m &= (df["tipo"] == tipo)
+    return df[m]
+
+
+def _activas_ahora(df: pd.DataFrame) -> pd.DataFrame:
+    """Imprevistas ocurriendo ahora."""
+    return _en_curso(df, "IMPREVISTA")
+
+
+def _programadas_en_curso(df: pd.DataFrame) -> pd.DataFrame:
+    """Programadas que ya empezaron y aun no terminan."""
+    return _en_curso(df, "PROGRAMADA")
 
 
 def _programadas_resto_mes(df: pd.DataFrame) -> pd.DataFrame:
-    """Programadas que empiezan entre ahora y fin del mes en curso."""
+    """Programadas que aun NO empiezan, de aqui a fin del mes en curso."""
     ahora = _ahora()
     return df[(df["tipo"] == "PROGRAMADA")
               & (df["inicio"] >= ahora)
@@ -203,10 +222,15 @@ def _guardar(hits: pd.DataFrame, etiqueta: str, punto: dict | None = None) -> st
     _SESSION_DATA["coincidencias"] = hits
     if punto:
         _SESSION_DATA["punto"] = punto
-    n_act, n_prog = len(_activas_ahora(hits)), len(_programadas_resto_mes(hits))
+    # El primer numero es el que decide el semaforo de la app: cuenta TODO lo
+    # que deja sin agua ahora, imprevisto o programado ya iniciado.
+    n_impr = len(_activas_ahora(hits))
+    n_curso = len(_programadas_en_curso(hits))
+    n_prog = len(_programadas_resto_mes(hits))
+    detalle = f"{n_impr} imprevista(s) y {n_curso} programada(s) ya iniciada(s)"
     return _evidencia(
-        f"{etiqueta}. Hay {n_act} interrupcion(es) imprevista(s) activa(s) ahora y "
-        f"{n_prog} programada(s) en lo que resta del mes."
+        f"{etiqueta}. Hay {n_impr + n_curso} interrupcion(es) con el servicio cortado "
+        f"ahora ({detalle}) y {n_prog} programada(s) por empezar en lo que resta del mes."
     )
 
 
@@ -323,25 +347,37 @@ def ubicar_por_distrito(distrito: str, provincia: str = "") -> str:
 
 def interrupciones_imprevistas() -> str:
     """
-    Interrupciones IMPREVISTAS activas ahora mismo en la zona ya ubicada.
+    Interrupciones con el servicio CORTADO AHORA MISMO en la zona ya ubicada,
+    distinguiendo las imprevistas de las programadas que ya empezaron.
     Devuelve causa, inicio, restablecimiento estimado y acciones de la empresa.
     """
     if "coincidencias" not in _SESSION_DATA:
         return "Primero ubica al ciudadano con ubicar_por_coordenadas o ubicar_por_distrito."
-    act = _activas_ahora(_SESSION_DATA["coincidencias"])
-    if act.empty:
-        return _evidencia("No hay interrupciones imprevistas activas en tu zona en este momento.")
+    hits = _SESSION_DATA["coincidencias"]
+    act, curso = _activas_ahora(hits), _programadas_en_curso(hits)
+    if act.empty and curso.empty:
+        return _evidencia("No hay ninguna interrupcion cortando el servicio en tu zona en este momento.")
 
-    partes = [f"Hay {len(act)} interrupcion(es) imprevista(s) activa(s) ahora:"]
-    for _, r in act.sort_values("inicio", ascending=False).head(5).iterrows():
-        partes.append(
+    def _detalle(r, programada: bool) -> str:
+        return (
             f"\n- Zona: {r['zona']} ({r['eps']})"
+            f"\n  Tipo: {'PROGRAMADA, ya iniciada' if programada else 'IMPREVISTA'}"
             f"\n  Causa: {r['clasificacion']} - {r['motivo']}"
             f"\n  Inicio: {_fecha(r['inicio'])}"
             f"\n  Restablecimiento estimado: {_fecha(r['fin_estimado'])}"
             f"\n  Duracion estimada: {r['duracion']}"
             f"\n  Acciones de la EP: {r['acciones']}"
         )
+
+    partes = []
+    if not act.empty:
+        partes.append(f"Hay {len(act)} interrupcion(es) imprevista(s) activa(s) ahora:")
+        partes += [_detalle(r, False) for _, r in act.sort_values("inicio", ascending=False).head(5).iterrows()]
+    if not curso.empty:
+        if partes:
+            partes.append("\n")
+        partes.append(f"Ademas hay {len(curso)} corte(s) programado(s) EN CURSO ahora mismo:")
+        partes += [_detalle(r, True) for _, r in curso.sort_values("inicio", ascending=False).head(5).iterrows()]
     return _evidencia("\n".join(partes))
 
 #   interrupciones_programadas()
@@ -350,24 +386,38 @@ def interrupciones_imprevistas() -> str:
 
 def interrupciones_programadas() -> str:
     """
-    Interrupciones PROGRAMADAS desde ahora hasta fin de mes en la zona ya ubicada.
+    Interrupciones PROGRAMADAS de la zona ya ubicada: primero las que estan en
+    curso ahora mismo y luego las que aun no empiezan, hasta fin de mes.
     Devuelve dia y hora de inicio, fin estimado y causa.
     """
     if "coincidencias" not in _SESSION_DATA:
         return "Primero ubica al ciudadano con ubicar_por_coordenadas o ubicar_por_distrito."
-    prog = _programadas_resto_mes(_SESSION_DATA["coincidencias"])
-    if prog.empty:
-        return _evidencia("No hay interrupciones programadas en lo que resta del mes en tu zona.")
+    hits = _SESSION_DATA["coincidencias"]
+    curso, prog = _programadas_en_curso(hits), _programadas_resto_mes(hits)
+    if curso.empty and prog.empty:
+        return _evidencia("No hay interrupciones programadas en curso ni por empezar "
+                          "en lo que resta del mes en tu zona.")
 
-    partes = [f"Hay {len(prog)} interrupcion(es) programada(s) en lo que resta del mes:"]
-    for _, r in prog.sort_values("inicio").head(5).iterrows():
-        partes.append(
+    def _detalle(r) -> str:
+        return (
             f"\n- Zona: {r['zona']} ({r['eps']})"
             f"\n  Causa: {r['clasificacion']} - {r['motivo']}"
             f"\n  Inicio programado: {_fecha(r['inicio'])}"
             f"\n  Fin estimado: {_fecha(r['fin_estimado'])}"
             f"\n  Duracion estimada: {r['duracion']}"
         )
+
+    partes = []
+    if not curso.empty:
+        partes.append(f"Hay {len(curso)} corte(s) programado(s) EN CURSO ahora mismo "
+                      f"(el servicio ya esta cortado):")
+        partes += [_detalle(r) for _, r in curso.sort_values("inicio").head(5).iterrows()]
+    if not prog.empty:
+        if partes:
+            partes.append("\n")
+        partes.append(f"Hay {len(prog)} interrupcion(es) programada(s) que aun no empiezan "
+                      f"en lo que resta del mes:")
+        partes += [_detalle(r) for _, r in prog.sort_values("inicio").head(5).iterrows()]
     return _evidencia("\n".join(partes))
 
 #   verificar_cisternas()
@@ -384,7 +434,9 @@ def verificar_cisternas() -> str:
     if "coincidencias" not in _SESSION_DATA:
         return "Primero ubica al ciudadano con ubicar_por_coordenadas o ubicar_por_distrito."
     df = _SESSION_DATA["coincidencias"]
-    vigentes = pd.concat([_activas_ahora(df), _programadas_resto_mes(df)])
+    # _en_curso cubre imprevistas y programadas ya iniciadas; el otro filtro, las
+    # programadas por empezar. Sin solaparse (inicio <= ahora vs inicio >= ahora).
+    vigentes = pd.concat([_en_curso(df), _programadas_resto_mes(df)])
     if vigentes.empty:
         return _evidencia("No hay interrupciones vigentes en tu zona, no aplica cisternas.")
 
@@ -441,6 +493,15 @@ def resumen_general(tipo: str = "ambas") -> str:
                 f"Ahora mismo hay {len(act)} interrupcion(es) imprevista(s) activa(s) en "
                 f"{len(pd_)} distrito(s): " + ", ".join(f"{d} ({n})" for d, n in pd_.items()) + "."
             )
+        # Los programados ya iniciados dejan sin agua igual: se reportan aparte
+        # para no mezclarlos con los imprevistos.
+        curso = _programadas_en_curso(gdf)
+        if not curso.empty:
+            pc = curso["dist_norm"].value_counts()
+            partes.append(
+                f"Ademas hay {len(curso)} corte(s) programado(s) EN CURSO en "
+                f"{len(pc)} distrito(s): " + ", ".join(f"{d} ({n})" for d, n in pc.items()) + "."
+            )
 
     if t != "ACTIVAS":
         prog = _programadas_resto_mes(gdf)
@@ -451,8 +512,9 @@ def resumen_general(tipo: str = "ambas") -> str:
             proximas = prog.sort_values("inicio").head(3)
             fechas = "; ".join(f"{r['dist_norm']} el {_fecha(r['inicio'])}" for _, r in proximas.iterrows())
             partes.append(
-                f"Hay {len(prog)} interrupcion(es) programada(s) en lo que resta del mes en "
-                f"{len(pd_)} distrito(s): " + ", ".join(f"{d} ({n})" for d, n in pd_.items())
+                f"Hay {len(prog)} interrupcion(es) programada(s) que aun no empiezan en lo que "
+                f"resta del mes en {len(pd_)} distrito(s): "
+                + ", ".join(f"{d} ({n})" for d, n in pd_.items())
                 + f". Las mas proximas: {fechas}."
             )
     return _evidencia(" ".join(partes))
@@ -492,9 +554,12 @@ def construir_mapa():
     lat, lon = punto.get("lat", -12.0464), punto.get("lon", -77.0428)
     m = folium.Map(location=[lat, lon], zoom_start=13, tiles="cartodbpositron")
 
+    # Tres capas: los dos primeros colores son cortes EN CURSO (el ciudadano no
+    # tiene agua ahora); el tercero, lo que aun no empieza.
     for nombre, sub, color in [
         ("Imprevistas activas", _activas_ahora(hits), "#d7191c"),
-        ("Programadas del mes", _programadas_resto_mes(hits), "#fdae61"),
+        ("Programadas en curso", _programadas_en_curso(hits), "#e6550d"),
+        ("Programadas por empezar", _programadas_resto_mes(hits), "#fdae61"),
     ]:
         if sub.empty:
             continue
@@ -535,7 +600,11 @@ def diagnostico_datos() -> dict:
         "provincias": int(gdf["prov_norm"].nunique()),
         "distritos": int(gdf["dist_norm"].nunique()),
         "ahora_lima": _ahora().strftime("%d/%m/%Y %H:%M"),
+        # sin_agua_ahora = TODO lo que corta el servicio en este instante; el
+        # desglose permite que el panel distinga imprevisto de programado.
+        "sin_agua_ahora": len(_en_curso(lima)),
         "activas_ahora": len(_activas_ahora(lima)),
+        "programadas_en_curso": len(_programadas_en_curso(lima)),
         "programadas_resto_mes": len(_programadas_resto_mes(lima)),
         "base_generada": meta.get("generado"),
         "archivo_origen": meta.get("archivo_origen"),

@@ -9,8 +9,9 @@ description: Procedimiento para informar a un ciudadano de Lima si hay interrupc
 
 Decirle al ciudadano, de forma clara y breve:
 
-1. Si **ahora mismo** hay una interrupcion imprevista en su zona.
-2. Si hay **programadas** en lo que resta del mes.
+1. Si **ahora mismo** esta sin agua: por una interrupcion imprevista o por un
+   corte programado que **ya empezo**. Las dos lo dejan sin servicio; di cual es.
+2. Si hay programadas que **aun no empiezan** en lo que resta del mes.
 3. Si hay abastecimiento con **camiones cisterna**.
 
 ## Flujo
@@ -24,8 +25,10 @@ mensaje como `[UBICACION YA RESUELTA: ...]`; si es asi, NO vuelvas a ubicarlo. S
 
 **Paso 2 - consultar.** Solo si ya esta ubicado:
 
-- `interrupciones_imprevistas()` - ¿hay corte ahora?
-- `interrupciones_programadas()` - ¿que viene este mes?
+- `interrupciones_imprevistas()` - ¿esta sin agua ahora? Devuelve las imprevistas
+  activas y tambien los cortes programados que ya empezaron, etiquetados.
+- `interrupciones_programadas()` - programados: primero los que estan en curso,
+  luego los que aun no empiezan este mes.
 - `verificar_cisternas()` - solo si alguna de las dos anteriores devolvio algo.
 
 ## Preguntas sobre toda la ciudad
@@ -36,9 +39,9 @@ hay ahora?", "¿en que distritos habra cortes?"— usa `resumen_general(tipo)` c
 
 ## Como responder
 
-- **Estado actual:** si hay corte, la causa, desde cuando y sobre todo la **hora
-  estimada de restablecimiento**, que es lo que la persona quiere saber. Si no hay,
-  dilo en una linea.
+- **Estado actual:** si hay corte, di si es **imprevisto o programado ya iniciado**,
+  la causa, desde cuando y sobre todo la **hora estimada de restablecimiento**, que
+  es lo que la persona quiere saber. Si no hay, dilo en una linea.
 - **Programadas:** dia y hora de inicio y fin. Si no hay, dilo.
 - **Cisternas:** solo si la tool las encontro.
 - **Cierre:** "Para mas informacion, comunicate al 1899."

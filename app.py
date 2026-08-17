@@ -209,8 +209,13 @@ with st.sidebar:
                f"{d['provincias']} provincias · 🕐 {d['ahora_lima']}")
 
     c1, c2 = st.columns(2)
-    c1.metric("🔴 Activas ahora", d["activas_ahora"])
-    c2.metric("🟠 Programadas", d["programadas_resto_mes"])
+    # "Sin agua ahora" suma imprevistas y programadas ya iniciadas: las dos
+    # dejan al vecino sin servicio. El desglose va debajo para distinguirlas.
+    c1.metric("🔴 Sin agua ahora", d["sin_agua_ahora"])
+    c2.metric("🟠 Por empezar", d["programadas_resto_mes"])
+    st.caption(f"Ahora: {d['activas_ahora']} imprevista(s) · "
+               f"{d['programadas_en_curso']} programada(s) en curso. "
+               f"«Por empezar» son las programadas del resto del mes.")
     st.caption("Contadores de Lima y Callao; la base cubre todo el pais.")
     if d["zona_horaria_ok"] is False:
         st.warning("La base quedo con fechas en UTC. Regenera con "
@@ -246,11 +251,14 @@ if u:
 
     etiqueta = (f"Coordenadas {u['lat']:.5f}, {u['lon']:.5f}" if u.get("lat") is not None
                 else f"{u['distrito']} ({u['provincia']})")
+    # El primer numero del resumen es el total de cortes EN CURSO (imprevistos
+    # + programados ya iniciados): el semaforo se pone rojo si el vecino no
+    # tiene agua ahora, sea cual sea el motivo.
     m = _re.search(r"Hay (\d+) interrupcion", resumen)
     if m and int(m.group(1)) > 0:
-        clase = "alert"      # hay al menos una imprevista activa ahora
+        clase = "alert"      # sin servicio en este momento
     elif m:
-        clase = "ok"         # ubicado, sin cortes activos
+        clase = "ok"         # ubicado, con servicio
     else:
         clase = "warn"       # fuera de cobertura / distrito no reconocido / sin registros
     st.markdown(f'<div class="geo-status {clase}">📍 <b>{etiqueta}</b> — {resumen}</div>',
