@@ -79,7 +79,7 @@ div[data-testid="stHorizontalBlock"] button[kind="secondary"]:hover {
 /* Panel lateral: espaciado moderado, sin scroll en pantallas normales */
 section[data-testid="stSidebar"] div[data-testid="stMetricValue"] { font-size: 1.35rem; }
 section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] { gap: 0.8rem; }
-section[data-testid="stSidebar"] hr { margin: 0.8rem 0; }
+section[data-testid="stSidebar"] hr { margin: 0.45rem 0; }
 div[data-testid="stSidebarUserContent"] { padding-top: 1.3rem; padding-bottom: 1.2rem; }
 .paso { font-weight:600; color:#0c4a6e; font-size:1.05rem; margin:.35rem 0 .1rem 0; }
 </style>
@@ -205,18 +205,15 @@ with st.sidebar:
     # cada 15 min y estos contadores deben reflejarla sin reiniciar la app.
     d = diagnostico_datos()
     st.markdown("### ⚙️ Estado del sistema")
-    st.caption(f"{d['registros']:,} interrupciones · {d['distritos']} distritos · "
-               f"{d['provincias']} provincias · 🕐 {d['ahora_lima']}")
 
     c1, c2 = st.columns(2)
-    # "Sin agua ahora" suma imprevistas y programadas ya iniciadas: las dos
+    # "Activas ahora" suma imprevistas y programadas ya iniciadas: las dos
     # dejan al vecino sin servicio. El desglose va debajo para distinguirlas.
-    c1.metric("🔴 Sin agua ahora", d["sin_agua_ahora"])
+    c1.metric("🔴 Activas ahora", d["sin_agua_ahora"])
     c2.metric("🟠 Por empezar", d["programadas_resto_mes"])
     st.caption(f"Ahora: {d['activas_ahora']} imprevista(s) · "
                f"{d['programadas_en_curso']} programada(s) en curso. "
                f"«Por empezar» son las programadas del resto del mes.")
-    st.caption("Contadores de Lima y Callao; la base cubre todo el pais.")
     if d["zona_horaria_ok"] is False:
         st.warning("La base quedo con fechas en UTC. Regenera con "
                    "`python preparar_datos.py --utc`.")
