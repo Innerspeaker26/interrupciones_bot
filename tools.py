@@ -176,6 +176,32 @@ def listar_distritos(provincia: str = "") -> list[str]:
 # --------------------------------------------------------------------------- #
 # Filtros temporales (la logica de negocio)
 # --------------------------------------------------------------------------- #
+def _n_int(df: pd.DataFrame) -> int:
+    """Cuenta INTERRUPCIONES, no filas. Una misma interrupcion puede traer
+    varios poligonos de zona afectada -hasta 21- y cada uno ocupa su propia
+    fila; contar filas infla los totales cerca de un 70%. El `codigo`
+    (INT-074167) es lo que las agrupa. Si la fuente no lo trae, cuenta filas."""
+    if "codigo" in df.columns and df["codigo"].notna().any():
+        return int(df["codigo"].nunique())
+    return len(df)
+
+
+def _una_por_int(df: pd.DataFrame) -> pd.DataFrame:
+    """Una sola fila por interrupcion, para listarlas sin repetirlas."""
+    if "codigo" in df.columns and df["codigo"].notna().any():
+        return df.drop_duplicates(subset="codigo")
+    return df
+
+
+def _conteo_por_distrito(df: pd.DataFrame):
+    """Interrupciones por distrito. Se deduplica por (codigo, distrito): una
+    interrupcion con varios poligonos cuenta una vez, pero si sus poligonos
+    caen en dos distritos, cuenta en ambos."""
+    if "codigo" in df.columns and df["codigo"].notna().any():
+        df = df.drop_duplicates(subset=["codigo", "dist_norm"])
+    return df["dist_norm"].value_counts()
+
+
 def _en_curso(df: pd.DataFrame, tipo: str = "") -> pd.DataFrame:
     """Cortes con el servicio INTERRUMPIDO en este instante, sean imprevistos o
     programados: inicio <= ahora <= fin_estimado. Con `tipo` se filtra a uno solo.
@@ -224,9 +250,9 @@ def _guardar(hits: pd.DataFrame, etiqueta: str, punto: dict | None = None) -> st
         _SESSION_DATA["punto"] = punto
     # El primer numero es el que decide el semaforo de la app: cuenta TODO lo
     # que deja sin agua ahora, imprevisto o programado ya iniciado.
-    n_impr = len(_activas_ahora(hits))
-    n_curso = len(_programadas_en_curso(hits))
-    n_prog = len(_programadas_resto_mes(hits))
+    n_impr = _n_int(_activas_ahora(hits))
+    n_curso = _n_int(_programadas_en_curso(hits))
+    n_prog = _n_int(_programadas_resto_mes(hits))
     detalle = f"{n_impr} imprevista(s) y {n_curso} programada(s) ya iniciada(s)"
     return _evidencia(
         f"{etiqueta}. Hay {n_impr + n_curso} interrupcion(es) con el servicio cortado "
@@ -371,13 +397,15 @@ def interrupciones_imprevistas() -> str:
 
     partes = []
     if not act.empty:
-        partes.append(f"Hay {len(act)} interrupcion(es) imprevista(s) activa(s) ahora:")
-        partes += [_detalle(r, False) for _, r in act.sort_values("inicio", ascending=False).head(5).iterrows()]
+        partes.append(f"Hay {_n_int(act)} interrupcion(es) imprevista(s) activa(s) ahora:")
+        filas = _una_por_int(act).sort_values("inicio", ascending=False).head(5)
+        partes += [_detalle(r, False) for _, r in filas.iterrows()]
     if not curso.empty:
         if partes:
             partes.append("\n")
-        partes.append(f"Ademas hay {len(curso)} corte(s) programado(s) EN CURSO ahora mismo:")
-        partes += [_detalle(r, True) for _, r in curso.sort_values("inicio", ascending=False).head(5).iterrows()]
+        partes.append(f"Ademas hay {_n_int(curso)} corte(s) programado(s) EN CURSO ahora mismo:")
+        filas = _una_por_int(curso).sort_values("inicio", ascending=False).head(5)
+        partes += [_detalle(r, True) for _, r in filas.iterrows()]
     return _evidencia("\n".join(partes))
 
 #   interrupciones_programadas()
@@ -409,15 +437,15 @@ def interrupciones_programadas() -> str:
 
     partes = []
     if not curso.empty:
-        partes.append(f"Hay {len(curso)} corte(s) programado(s) EN CURSO ahora mismo "
+        partes.append(f"Hay {_n_int(curso)} corte(s) programado(s) EN CURSO ahora mismo "
                       f"(el servicio ya esta cortado):")
-        partes += [_detalle(r) for _, r in curso.sort_values("inicio").head(5).iterrows()]
+        partes += [_detalle(r) for _, r in _una_por_int(curso).sort_values("inicio").head(5).iterrows()]
     if not prog.empty:
         if partes:
             partes.append("\n")
-        partes.append(f"Hay {len(prog)} interrupcion(es) programada(s) que aun no empiezan "
+        partes.append(f"Hay {_n_int(prog)} interrupcion(es) programada(s) que aun no empiezan "
                       f"en lo que resta del mes:")
-        partes += [_detalle(r) for _, r in prog.sort_values("inicio").head(5).iterrows()]
+        partes += [_detalle(r) for _, r in _una_por_int(prog).sort_values("inicio").head(5).iterrows()]
     return _evidencia("\n".join(partes))
 
 #   verificar_cisternas()
@@ -436,7 +464,7 @@ def verificar_cisternas() -> str:
     df = _SESSION_DATA["coincidencias"]
     # _en_curso cubre imprevistas y programadas ya iniciadas; el otro filtro, las
     # programadas por empezar. Sin solaparse (inicio <= ahora vs inicio >= ahora).
-    vigentes = pd.concat([_en_curso(df), _programadas_resto_mes(df)])
+    vigentes = _una_por_int(pd.concat([_en_curso(df), _programadas_resto_mes(df)]))
     if vigentes.empty:
         return _evidencia("No hay interrupciones vigentes en tu zona, no aplica cisternas.")
 
@@ -488,18 +516,18 @@ def resumen_general(tipo: str = "ambas") -> str:
         if act.empty:
             partes.append("Ahora mismo no hay interrupciones imprevistas activas en la base.")
         else:
-            pd_ = act["dist_norm"].value_counts()
+            pd_ = _conteo_por_distrito(act)
             partes.append(
-                f"Ahora mismo hay {len(act)} interrupcion(es) imprevista(s) activa(s) en "
+                f"Ahora mismo hay {_n_int(act)} interrupcion(es) imprevista(s) activa(s) en "
                 f"{len(pd_)} distrito(s): " + ", ".join(f"{d} ({n})" for d, n in pd_.items()) + "."
             )
         # Los programados ya iniciados dejan sin agua igual: se reportan aparte
         # para no mezclarlos con los imprevistos.
         curso = _programadas_en_curso(gdf)
         if not curso.empty:
-            pc = curso["dist_norm"].value_counts()
+            pc = _conteo_por_distrito(curso)
             partes.append(
-                f"Ademas hay {len(curso)} corte(s) programado(s) EN CURSO en "
+                f"Ademas hay {_n_int(curso)} corte(s) programado(s) EN CURSO en "
                 f"{len(pc)} distrito(s): " + ", ".join(f"{d} ({n})" for d, n in pc.items()) + "."
             )
 
@@ -508,11 +536,11 @@ def resumen_general(tipo: str = "ambas") -> str:
         if prog.empty:
             partes.append("No hay interrupciones programadas en lo que resta del mes.")
         else:
-            pd_ = prog["dist_norm"].value_counts()
-            proximas = prog.sort_values("inicio").head(3)
+            pd_ = _conteo_por_distrito(prog)
+            proximas = _una_por_int(prog).sort_values("inicio").head(3)
             fechas = "; ".join(f"{r['dist_norm']} el {_fecha(r['inicio'])}" for _, r in proximas.iterrows())
             partes.append(
-                f"Hay {len(prog)} interrupcion(es) programada(s) que aun no empiezan en lo que "
+                f"Hay {_n_int(prog)} interrupcion(es) programada(s) que aun no empiezan en lo que "
                 f"resta del mes en {len(pd_)} distrito(s): "
                 + ", ".join(f"{d} ({n})" for d, n in pd_.items())
                 + f". Las mas proximas: {fechas}."
@@ -563,7 +591,8 @@ def construir_mapa():
     ]:
         if sub.empty:
             continue
-        capa = folium.FeatureGroup(name=f"{nombre} ({len(sub)})")
+        # La etiqueta cuenta interrupciones; el mapa dibuja todos sus poligonos.
+        capa = folium.FeatureGroup(name=f"{nombre} ({_n_int(sub)})")
         for _, r in sub.head(50).iterrows():
             folium.GeoJson(
                 r.geometry,
@@ -594,7 +623,8 @@ def diagnostico_datos() -> dict:
     # resumen_general: por diseno ambos numeros deben coincidir SIEMPRE.
     lima = _ambito_lima(gdf)
     return {
-        "registros": len(gdf),
+        "registros": len(gdf),              # filas = poligonos de zona afectada
+        "interrupciones": _n_int(gdf),      # lo que el ciudadano entiende por corte
         "con_geometria": int(gdf.geometry.notna().sum()),
         "sin_geometria": int(gdf.geometry.isna().sum()),
         "provincias": int(gdf["prov_norm"].nunique()),
@@ -602,10 +632,10 @@ def diagnostico_datos() -> dict:
         "ahora_lima": _ahora().strftime("%d/%m/%Y %H:%M"),
         # sin_agua_ahora = TODO lo que corta el servicio en este instante; el
         # desglose permite que el panel distinga imprevisto de programado.
-        "sin_agua_ahora": len(_en_curso(lima)),
-        "activas_ahora": len(_activas_ahora(lima)),
-        "programadas_en_curso": len(_programadas_en_curso(lima)),
-        "programadas_resto_mes": len(_programadas_resto_mes(lima)),
+        "sin_agua_ahora": _n_int(_en_curso(lima)),
+        "activas_ahora": _n_int(_activas_ahora(lima)),
+        "programadas_en_curso": _n_int(_programadas_en_curso(lima)),
+        "programadas_resto_mes": _n_int(_programadas_resto_mes(lima)),
         "base_generada": meta.get("generado"),
         "archivo_origen": meta.get("archivo_origen"),
         "zona_horaria_ok": meta.get("zona_horaria_ok"),

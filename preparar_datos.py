@@ -47,6 +47,10 @@ TZ_LIMA = ZoneInfo("America/Lima")
 # Nombres ajustados
 
 RENOMBRES = {
+    # Identificador de la INTERRUPCION (INT-074167). Una misma interrupcion
+    # puede traer varios poligonos de zona afectada -hasta 21-, cada uno en su
+    # propia fila: sin este campo los conteos cuentan poligonos, no cortes.
+    "c_digo": "codigo",
     "tipo_de_interrupci_n": "tipo",
     "motivo_de_interrupci_n": "motivo",
     "detalle_de_motivo": "detalle",
@@ -65,8 +69,8 @@ RENOMBRES = {
 COLS_TEXTO = ["provincia", "distrito", "localidad", "sector", "eps", "tipo",
               "situacion", "clasificacion", "motivo", "detalle", "acciones", "duracion"]
 COLS_FECHA = ["inicio", "fin_estimado"]
-COLS_FINALES = COLS_TEXTO + COLS_FECHA + ["conexiones", "zona", "prov_norm", "dist_norm",
-                                          "departamento", "dep_norm", "geometry"]
+COLS_FINALES = COLS_TEXTO + COLS_FECHA + ["codigo", "conexiones", "zona", "prov_norm",
+                                          "dist_norm", "departamento", "dep_norm", "geometry"]
 
 # Solución de errores encontrados
 
@@ -167,6 +171,12 @@ def preparar(entrada: Path, datos_en_utc: bool = False) -> dict:
     # La base nueva es NACIONAL y trae departamento: se conserva normalizado para
     # que el panorama y los contadores del panel puedan acotarse a Lima/Callao.
     # Las fuentes viejas no lo traen (ya venian acotadas): queda vacio.
+    # El codigo agrupa las filas (poligonos) de una misma interrupcion. Si la
+    # fuente no lo trae, queda vacio y los conteos vuelven a ser por fila.
+    if "codigo" not in gdf.columns:
+        gdf["codigo"] = pd.NA
+    gdf["codigo"] = gdf["codigo"].astype("string").str.strip()
+
     if "departamento" not in gdf.columns:
         gdf["departamento"] = pd.NA
     gdf["departamento"] = gdf["departamento"].astype("string").str.strip()
@@ -205,7 +215,8 @@ def preparar(entrada: Path, datos_en_utc: bool = False) -> dict:
         "archivo_origen": entrada.name,
         "flag_utc": datos_en_utc,
         "registros_crudos": n_crudo,
-        "registros": len(gdf),
+        "registros": len(gdf),                      # filas = poligonos
+        "interrupciones": int(gdf["codigo"].nunique()),  # lo que cuenta la app
         "con_geometria": int(gdf.geometry.notna().sum()),
         "provincias": int(gdf["prov_norm"].nunique()),
         "distritos": int(gdf["dist_norm"].nunique()),
@@ -215,7 +226,8 @@ def preparar(entrada: Path, datos_en_utc: bool = False) -> dict:
     METADATA.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
 
     print(f"\nOK -> {PARQUET_LIMPIO.name}")
-    print(f"  {meta['registros']:,} registros ({meta['con_geometria']:,} con poligono), "
+    print(f"  {meta['interrupciones']:,} interrupciones en {meta['registros']:,} filas "
+          f"({meta['con_geometria']:,} con poligono), "
           f"{meta['distritos']} distritos, {meta['provincias']} provincias")
     if tz_ok is False:
         print(f"  [ALERTA] Control de zona horaria: {hora}, se esperaba "
