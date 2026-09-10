@@ -17,6 +17,13 @@ setlocal
 cd /d "%~dp0"
 if not exist logs mkdir logs
 
+rem Primero, cerrar cualquier corrida anterior que haya quedado colgada (una
+rem descarga del portal que nunca responde, p. ej.). Es imprescindible: el
+rem proceso zombi mantiene abierto el log y con eso bloquea la escritura de
+rem TODAS las corridas siguientes, que pasan a terminar con codigo 0 sin hacer
+rem nada. Sin esto, un solo cuelgue congela la base indefinidamente.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0matar_colgados.ps1" >> logs\actualizar_base.log 2>&1
+
 echo ====================================================== >> logs\actualizar_base.log
 echo Inicio: %date% %time% >> logs\actualizar_base.log
 
