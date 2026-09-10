@@ -603,14 +603,32 @@ TOOLS = [
 
 # --------------------------------------------------------------------------- #
 # Mapa (lo llama la app, no el agente)
-# --------------------------------------------------------------------------- #
+# Mapa base gris. NO se usa "cartodbpositron" (el que trae folium por defecto):
+# CARTO paso a exigir clave para sus basemaps y ahora devuelve las teselas
+# selladas con "API KEY REQUIRED". Este canvas de Esri es gris claro igual -lo
+# que hace resaltar los poligonos rojos y naranjas-, no pide clave, y encaja con
+# el resto del proyecto, que ya vive en el ecosistema ArcGIS de SUNASS.
+# Ojo con el orden {z}/{y}/{x}: Esri invierte y/x respecto de la convencion XYZ.
+TILES_BASE = ("https://server.arcgisonline.com/ArcGIS/rest/services/"
+              "Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}")
+ATTR_BASE = "Esri, HERE, Garmin, © OpenStreetMap contributors"
+
+
+def _mapa_base(lat: float, lon: float, zoom: int):
+    """Mapa con el fondo gris ya puesto. El basemap va con control=False: es el
+    unico, y un selector de una sola opcion solo estorba en la leyenda."""
+    m = folium.Map(location=[lat, lon], zoom_start=zoom, tiles=None)
+    folium.TileLayer(tiles=TILES_BASE, attr=ATTR_BASE, name="Mapa base",
+                     control=False).add_to(m)
+    return m
+
+
 def construir_mapa():
     """Rojo: imprevistas activas. Naranja: programadas del mes. Sin ubicacion,
     un mapa de Lima clicable para elegirla ahi mismo."""
     if "coincidencias" not in _SESSION_DATA:
         p = _SESSION_DATA.get("punto") or {}
-        m = folium.Map(location=[p.get("lat", -12.05), p.get("lon", -77.05)],
-                       zoom_start=13 if p else 10, tiles="cartodbpositron")
+        m = _mapa_base(p.get("lat", -12.05), p.get("lon", -77.05), 13 if p else 10)
         if p.get("lat") is not None:
             folium.Marker([p["lat"], p["lon"]],
                           tooltip="Tu ubicacion (sin interrupciones registradas)",
@@ -621,7 +639,7 @@ def construir_mapa():
     hits = hits[hits.geometry.notna()]
     punto = _SESSION_DATA.get("punto") or {}
     lat, lon = punto.get("lat", -12.0464), punto.get("lon", -77.0428)
-    m = folium.Map(location=[lat, lon], zoom_start=13, tiles="cartodbpositron")
+    m = _mapa_base(lat, lon, 13)
 
     # Tres capas: los dos primeros colores son cortes EN CURSO (el ciudadano no
     # tiene agua ahora); el tercero, lo que aun no empieza.
