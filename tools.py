@@ -201,13 +201,23 @@ def _una_por_int(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _conteo_por_distrito(df: pd.DataFrame):
+def _etiqueta_zona(df: pd.DataFrame, con_provincia: bool) -> pd.Series:
+    """Nombre del distrito, con su provincia al lado cuando hace falta."""
+    if not con_provincia or "prov_norm" not in df.columns:
+        return df["dist_norm"]
+    prov = df["prov_norm"].fillna("").astype(str)
+    return df["dist_norm"].astype(str).where(prov.eq(""),
+                                             df["dist_norm"].astype(str) + " (" + prov + ")")
+
+
+def _conteo_por_distrito(df: pd.DataFrame, con_provincia: bool = False):
     """Interrupciones por distrito. Se deduplica por (codigo, distrito): una
     interrupcion con varios poligonos cuenta una vez, pero si sus poligonos
     caen en dos distritos, cuenta en ambos."""
+    claves = ["codigo", "dist_norm"]
     if "codigo" in df.columns and df["codigo"].notna().any():
-        df = df.drop_duplicates(subset=["codigo", "dist_norm"])
-    return df["dist_norm"].value_counts()
+        df = df.drop_duplicates(subset=claves)
+    return _etiqueta_zona(df, con_provincia).value_counts()
 
 
 def _en_curso(df: pd.DataFrame, tipo: str = "") -> pd.DataFrame:
@@ -521,7 +531,8 @@ def _ambito_lima(gdf):
     return _ambito(gdf)
 
 
-def resumen_general(tipo: str = "ambas", departamento: str = "") -> str:
+def resumen_general(tipo: str = "ambas", departamento: str = "",
+                    con_provincia: bool | None = None) -> str:
     """
     Panorama de un departamento completo; no necesita ubicacion. Usar para
     "cuantas interrupciones hay" o "que distritos estan afectados".
@@ -529,7 +540,12 @@ def resumen_general(tipo: str = "ambas", departamento: str = "") -> str:
     Args:
         tipo: "activas", "programadas" o "ambas".
         departamento: Ej. "ANCASH". Vacio = Lima y Callao.
+        con_provincia: Nombra la provincia junto al distrito. Por defecto se
+            activa fuera de Lima y Callao, donde un nombre de distrito no basta
+            para ubicarse: hay varios "Santa Rosa" o "San Juan" en el pais.
     """
+    if con_provincia is None:
+        con_provincia = bool(departamento) and _norm(departamento) not in DEPS_PANORAMA
     gdf = _ambito(cargar_base(), departamento)
     t = _norm(tipo)
     partes = []
@@ -539,7 +555,7 @@ def resumen_general(tipo: str = "ambas", departamento: str = "") -> str:
         if act.empty:
             partes.append("Ahora mismo no hay interrupciones imprevistas activas en la base.")
         else:
-            pd_ = _conteo_por_distrito(act)
+            pd_ = _conteo_por_distrito(act, con_provincia)
             partes.append(
                 f"Ahora mismo hay {_n_int(act)} interrupcion(es) imprevista(s) activa(s) en "
                 f"{len(pd_)} distrito(s): " + ", ".join(f"{d} ({n})" for d, n in pd_.items()) + "."
@@ -548,7 +564,7 @@ def resumen_general(tipo: str = "ambas", departamento: str = "") -> str:
         # para no mezclarlos con los imprevistos.
         curso = _programadas_en_curso(gdf)
         if not curso.empty:
-            pc = _conteo_por_distrito(curso)
+            pc = _conteo_por_distrito(curso, con_provincia)
             partes.append(
                 f"Ademas hay {_n_int(curso)} corte(s) programado(s) EN CURSO en "
                 f"{len(pc)} distrito(s): " + ", ".join(f"{d} ({n})" for d, n in pc.items()) + "."
@@ -559,9 +575,11 @@ def resumen_general(tipo: str = "ambas", departamento: str = "") -> str:
         if prog.empty:
             partes.append("No hay interrupciones programadas en lo que resta del mes.")
         else:
-            pd_ = _conteo_por_distrito(prog)
+            pd_ = _conteo_por_distrito(prog, con_provincia)
             proximas = _una_por_int(prog).sort_values("inicio").head(3)
-            fechas = "; ".join(f"{r['dist_norm']} el {_fecha(r['inicio'])}" for _, r in proximas.iterrows())
+            nombres = _etiqueta_zona(proximas, con_provincia)
+            fechas = "; ".join(f"{z} el {_fecha(f)}"
+                               for z, f in zip(nombres, proximas["inicio"]))
             partes.append(
                 f"Hay {_n_int(prog)} interrupcion(es) programada(s) que aun no empiezan en lo que "
                 f"resta del mes en {len(pd_)} distrito(s): "
