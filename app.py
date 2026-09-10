@@ -24,13 +24,27 @@ ambas columnas queden visualmente parejas.
 
 from __future__ import annotations
 
+import os
 import uuid
 
 import streamlit as st
 from streamlit_folium import st_folium
 
+# --------------------------------------------------------------------------- #
+# Ambito: un mismo codigo sirve a dos despliegues.
+#   AMBITO=lima     (por defecto) la app de Lima, tal como estaba: sin selector
+#                   de departamento y con los conteos fijos en Lima y Callao.
+#   AMBITO=nacional la app de las 50 EPS: cascada departamento -> provincia ->
+#                   distrito, y contadores y panorama que siguen al ambito.
+# Se define en el .env local o en los secrets de Streamlit Cloud, asi que cada
+# despliegue elige el suyo sin tocar el codigo ni duplicar el repositorio.
+# --------------------------------------------------------------------------- #
+NACIONAL = os.getenv("AMBITO", "lima").strip().lower() == "nacional"
+TITULO = ("GeoAgente de interrupciones de agua — Perú" if NACIONAL
+          else "GeoAgente de interrupciones de agua — Lima")
+
 st.set_page_config(
-    page_title="GeoAgente · Interrupciones de agua Lima",
+    page_title=f"GeoAgente · {'Perú' if NACIONAL else 'Interrupciones de agua Lima'}",
     page_icon="💧",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -108,9 +122,9 @@ try:
 except Exception as exc:  # noqa: BLE001
     CTX, ERROR = None, exc
 
-st.markdown("""
+st.markdown(f"""
 <div class="geo-header">
-  <h1>💧 GeoAgente de interrupciones de agua — Lima</h1>
+  <h1>💧 {TITULO}</h1>
   <p>Comparte tu ubicacion o dime tu distrito y te digo si hay corte de agua,
   cuando vuelve el servicio y si hay camiones cisterna.</p>
 </div>
@@ -190,14 +204,19 @@ with st.sidebar:
                 st.session_state.ubicacion = {"lat": loc["latitude"], "lon": loc["longitude"]}
 
     with tab_distrito:
-        # Cascada departamento -> provincia -> distrito. La base es nacional:
-        # sin el primer nivel, el desplegable de provincias tendria 196
-        # entradas y el de distritos casi 1,800.
-        departamentos = listar_departamentos()
-        dep_sel = st.selectbox(
-            "Departamento", departamentos,
-            index=departamentos.index("LIMA") if "LIMA" in departamentos else 0)
-        provincias = listar_provincias(dep_sel)
+        if NACIONAL:
+            # Cascada departamento -> provincia -> distrito. Sin el primer
+            # nivel, el desplegable de provincias tendria 196 entradas y el de
+            # distritos casi 1,800.
+            departamentos = listar_departamentos()
+            dep_sel = st.selectbox(
+                "Departamento", departamentos,
+                index=departamentos.index("LIMA") if "LIMA" in departamentos else 0)
+            provincias = listar_provincias(dep_sel)
+        else:
+            # Version Lima: sin selector, acotada al area Lima-Callao.
+            dep_sel = "LIMA"
+            provincias = listar_provincias(ambito_lima=True)
         provincia = st.selectbox("Provincia", provincias,
                                  index=provincias.index("LIMA") if "LIMA" in provincias else 0)
         distrito = st.selectbox("Distrito", listar_distritos(provincia))
@@ -207,17 +226,21 @@ with st.sidebar:
     st.caption("💡 O haz clic en el mapa, o escribe tu distrito en el chat.")
 
     st.divider()
-    # El ambito manda la ubicacion resuelta; si aun no hay, el desplegable.
-    # Asi los contadores y el panorama siguen a donde esta el ciudadano
-    # aunque haya llegado por GPS o por un clic en el mapa.
-    dep_activo = departamento_ubicado() or dep_sel
+    # En la version nacional el ambito lo manda la ubicacion ya resuelta y, si
+    # aun no hay, el desplegable: asi los contadores y el panorama siguen a
+    # donde esta el ciudadano aunque haya llegado por GPS o por el mapa. En la
+    # version de Lima queda fijo, como siempre estuvo.
+    dep_activo = (departamento_ubicado() or dep_sel) if NACIONAL else "LIMA"
     # Lima y Callao se reportan juntos: son una sola area metropolitana.
-    etiqueta_ambito = "Lima y Callao" if dep_activo in ("LIMA", "CALLAO") else dep_activo.title()
+    if dep_activo in ("LIMA", "CALLAO"):
+        etiqueta_ambito = "Lima y Callao" if NACIONAL else "Lima"
+    else:
+        etiqueta_ambito = dep_activo.title()
 
     # En vivo (no el diag cacheado de CTX): la base se refresca desde el Drive
     # cada 15 min y estos contadores deben reflejarla sin reiniciar la app.
     d = diagnostico_datos(dep_activo)
-    st.markdown(f"### ⚙️ {etiqueta_ambito}")
+    st.markdown(f"### ⚙️ {etiqueta_ambito if NACIONAL else 'Estado del sistema'}")
 
     c1, c2 = st.columns(2)
     # "Activas ahora" suma imprevistas y programadas ya iniciadas: las dos
