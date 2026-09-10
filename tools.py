@@ -608,21 +608,34 @@ TOOLS = [
 #     poligonos, pero solo llega al zoom 16; mas cerca muestra "Map data not
 #     yet available", justo cuando el vecino quiere reconocer su cuadra.
 # OpenStreetMap tiene teselas reales hasta el zoom 19 y ademas rotula las
-# calles, que es lo que permite confirmar "si, es mi manzana". A cambio el
-# fondo es de colores, pero el rojo y el naranja de los poligonos se
-# distinguen bien del verde y el beige del mapa.
+# calles, que es lo que permite confirmar "si, es mi manzana".
 TILES_BASE = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 ATTR_BASE = "&copy; OpenStreetMap contributors"
 ZOOM_MAX = 19
 
+# El fondo de OSM viene a todo color y compite con los poligonos. En vez de
+# cambiar de proveedor -los grises sin clave o no llegan al zoom 19 o exigen
+# API key- se le quita el color por CSS. Leaflet dibuja las teselas y los
+# vectores en capas separadas, asi que el filtro sobre .leaflet-tile-pane
+# solo afecta al mapa base: los poligonos rojos y naranjas y el marcador azul
+# conservan su color. El brillo y contraste aclaran el gris para que se
+# parezca al positron que usabamos antes.
+CSS_MAPA_GRIS = """
+<style>
+  .leaflet-tile-pane { filter: grayscale(1) brightness(1.07) contrast(0.9); }
+</style>
+"""
+
 
 def _mapa_base(lat: float, lon: float, zoom: int):
-    """Mapa con el fondo ya puesto. El basemap va con control=False: es el
-    unico, y un selector de una sola opcion solo estorba en la leyenda."""
+    """Mapa con el fondo ya puesto, en escala de grises. El basemap va con
+    control=False: es el unico, y un selector de una sola opcion solo estorba
+    en la leyenda."""
     m = folium.Map(location=[lat, lon], zoom_start=zoom, tiles=None,
                    max_zoom=ZOOM_MAX)
     folium.TileLayer(tiles=TILES_BASE, attr=ATTR_BASE, name="Mapa base",
                      control=False, max_zoom=ZOOM_MAX).add_to(m)
+    m.get_root().header.add_child(folium.Element(CSS_MAPA_GRIS))
     return m
 
 
