@@ -157,12 +157,20 @@ def metadata_base() -> dict:
     return {}
 
 
-def listar_provincias(ambito_lima: bool = False) -> list[str]:
-    """Con ambito_lima=True se limita al departamento de Lima y al Callao (el
-    mismo recorte del panorama), para el desplegable de la app."""
+def listar_departamentos() -> list[str]:
+    """Departamentos con interrupciones registradas, para el desplegable."""
     gdf = cargar_base()
-    if ambito_lima:
-        gdf = _ambito_lima(gdf)
+    if "dep_norm" not in gdf.columns:
+        return []
+    return sorted(d for d in gdf["dep_norm"].dropna().unique().tolist() if d)
+
+
+def listar_provincias(departamento: str = "", ambito_lima: bool = False) -> list[str]:
+    """Provincias del departamento indicado. Sin argumentos, todas las de la
+    base; con `ambito_lima` (heredado), las del area Lima-Callao."""
+    gdf = cargar_base()
+    if departamento or ambito_lima:
+        gdf = _ambito(gdf, departamento)
     return sorted(gdf["prov_norm"].dropna().unique().tolist())
 
 
@@ -489,25 +497,40 @@ def verificar_cisternas() -> str:
 DEPS_PANORAMA = {"LIMA", "CALLAO"}
 
 
-def _ambito_lima(gdf):
-    """Recorta al departamento de Lima y al Callao. La base nueva es NACIONAL,
-    pero la app (y su panorama) son de Lima: sin este recorte el resumen mezcla
-    Trujillo o Tacna. Las fuentes viejas no traen departamento y ya venian
-    acotadas: se devuelven tal cual."""
+def _deps_ambito(departamento: str = "") -> set[str]:
+    """Departamentos que entran en un ambito. Lima y Callao van SIEMPRE juntos:
+    son una sola area metropolitana y separarlos daria conteos que nadie
+    reconoce. Sin argumento, el ambito por defecto es esa area."""
+    dep = _norm(departamento)
+    if not dep or dep in DEPS_PANORAMA:
+        return set(DEPS_PANORAMA)
+    return {dep}
+
+
+def _ambito(gdf, departamento: str = ""):
+    """Recorta la base al departamento pedido. La base es NACIONAL: sin este
+    recorte, un resumen de Lima mezclaria Trujillo o Tacna. Las fuentes viejas
+    no traen departamento y ya venian acotadas: se devuelven tal cual."""
     if "dep_norm" in gdf.columns and gdf["dep_norm"].ne("").any():
-        return gdf[gdf["dep_norm"].isin(DEPS_PANORAMA)]
+        return gdf[gdf["dep_norm"].isin(_deps_ambito(departamento))]
     return gdf
 
 
-def resumen_general(tipo: str = "ambas") -> str:
+def _ambito_lima(gdf):
+    """Compatibilidad: el ambito por defecto (Lima y Callao)."""
+    return _ambito(gdf)
+
+
+def resumen_general(tipo: str = "ambas", departamento: str = "") -> str:
     """
-    Panorama de Lima y Callao (todas sus provincias); no necesita ubicacion.
-    Usar para "cuantas interrupciones hay" o "que distritos estan afectados".
+    Panorama de un departamento completo; no necesita ubicacion. Usar para
+    "cuantas interrupciones hay" o "que distritos estan afectados".
 
     Args:
         tipo: "activas", "programadas" o "ambas".
+        departamento: Ej. "ANCASH". Vacio = Lima y Callao.
     """
-    gdf = _ambito_lima(cargar_base())
+    gdf = _ambito(cargar_base(), departamento)
     t = _norm(tipo)
     partes = []
 
@@ -614,14 +637,25 @@ def construir_mapa():
 # --------------------------------------------------------------------------- #
 # Diagnostico (no es tool)
 # --------------------------------------------------------------------------- #
-def diagnostico_datos() -> dict:
+def departamento_ubicado() -> str:
+    """Departamento de la ubicacion ya resuelta, si la hay. Permite que el
+    panorama y los contadores sigan a donde esta el ciudadano, no al
+    desplegable."""
+    hits = _SESSION_DATA.get("coincidencias")
+    if hits is None or hits.empty or "dep_norm" not in hits.columns:
+        return ""
+    modas = hits["dep_norm"].mode()
+    return str(modas.iat[0]) if not modas.empty else ""
+
+
+def diagnostico_datos(departamento: str = "") -> dict:
     """Salud de la base limpia. `zona_horaria_ok` sale de metadata.json, que lo
     escribio preparar_datos.py: si es False, hay que regenerar la base."""
     gdf = cargar_base()
     meta = metadata_base()
-    # Los contadores Activas/Programadas se acotan a Lima y Callao, igual que
-    # resumen_general: por diseno ambos numeros deben coincidir SIEMPRE.
-    lima = _ambito_lima(gdf)
+    # Los contadores Activas/Programadas se acotan al MISMO departamento que el
+    # panorama: por diseno ambos numeros deben coincidir SIEMPRE.
+    lima = _ambito(gdf, departamento)
     return {
         "registros": len(gdf),              # filas = poligonos de zona afectada
         "interrupciones": _n_int(gdf),      # lo que el ciudadano entiende por corte

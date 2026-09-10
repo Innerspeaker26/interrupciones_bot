@@ -137,8 +137,10 @@ if ERROR is not None:
 from tools import (  # noqa: E402  (despues del st.stop para no fallar dos veces)
     clear_session_data,
     construir_mapa,
+    departamento_ubicado,
     diagnostico_datos,
     get_session_data,
+    listar_departamentos,
     listar_distritos,
     listar_provincias,
     ubicar_por_coordenadas,
@@ -188,10 +190,14 @@ with st.sidebar:
                 st.session_state.ubicacion = {"lat": loc["latitude"], "lon": loc["longitude"]}
 
     with tab_distrito:
-        # El desplegable cubre el departamento de Lima y el Callao (el mismo
-        # ambito del panorama). Los demas distritos del pais siguen disponibles
-        # escribiendolos en el chat.
-        provincias = listar_provincias(ambito_lima=True)
+        # Cascada departamento -> provincia -> distrito. La base es nacional:
+        # sin el primer nivel, el desplegable de provincias tendria 196
+        # entradas y el de distritos casi 1,800.
+        departamentos = listar_departamentos()
+        dep_sel = st.selectbox(
+            "Departamento", departamentos,
+            index=departamentos.index("LIMA") if "LIMA" in departamentos else 0)
+        provincias = listar_provincias(dep_sel)
         provincia = st.selectbox("Provincia", provincias,
                                  index=provincias.index("LIMA") if "LIMA" in provincias else 0)
         distrito = st.selectbox("Distrito", listar_distritos(provincia))
@@ -201,10 +207,17 @@ with st.sidebar:
     st.caption("💡 O haz clic en el mapa, o escribe tu distrito en el chat.")
 
     st.divider()
+    # El ambito manda la ubicacion resuelta; si aun no hay, el desplegable.
+    # Asi los contadores y el panorama siguen a donde esta el ciudadano
+    # aunque haya llegado por GPS o por un clic en el mapa.
+    dep_activo = departamento_ubicado() or dep_sel
+    # Lima y Callao se reportan juntos: son una sola area metropolitana.
+    etiqueta_ambito = "Lima y Callao" if dep_activo in ("LIMA", "CALLAO") else dep_activo.title()
+
     # En vivo (no el diag cacheado de CTX): la base se refresca desde el Drive
     # cada 15 min y estos contadores deben reflejarla sin reiniciar la app.
-    d = diagnostico_datos()
-    st.markdown("### ⚙️ Estado del sistema")
+    d = diagnostico_datos(dep_activo)
+    st.markdown(f"### ⚙️ {etiqueta_ambito}")
 
     c1, c2 = st.columns(2)
     # "Activas ahora" suma imprevistas y programadas ya iniciadas: las dos
@@ -341,7 +354,7 @@ with historial:
                 render_monitor(msg["extraido"], msg.get("tool_calls", []), msg.get("guardarrailes", []))
 
 
-def ejecutar_turno(prompt: str, panorama: bool = False) -> bool:
+def ejecutar_turno(prompt: str, panorama: bool = False, departamento: str = "") -> bool:
     """Turno completo: extraer -> pre-resolver -> agente -> guardarrailes.
     Devuelve True si la ubicacion cambio (los llamadores reejecutan siempre
     igualmente, porque semaforo y mapa se pintan antes que el turno).
@@ -371,13 +384,13 @@ def ejecutar_turno(prompt: str, panorama: bool = False) -> bool:
             consulta = extract_query(prompt, usar_llm=usar_llm_extraccion)
 
             if panorama:
-                # Panorama de toda Lima: determinista, sin ubicacion ni LLM.
+                # Panorama del departamento activo: determinista, sin LLM.
                 from tools import resumen_general
 
-                bruto = resumen_general("ambas")
+                bruto = resumen_general("ambas", departamento)
                 tcalls = [{
                     "tool": "resumen_general",
-                    "args": {"tipo": "ambas"},
+                    "args": {"tipo": "ambas", "departamento": departamento},
                     "resultado": bruto[:200] + ("..." if len(bruto) > 200 else ""),
                 }]
             else:
@@ -450,7 +463,9 @@ ACCIONES = [
     ("🚱 ¿Hay corte ahora?", "¿Hay alguna interrupcion de agua en mi zona ahora mismo?", True, False),
     ("📅 Cortes programados", "¿Hay cortes de agua programados en mi zona en lo que resta del mes?", True, False),
     ("🚚 ¿Hay cisternas?", "¿Hay abastecimiento con camiones cisterna en mi zona?", True, False),
-    ("🌆 Panorama de Lima", "¿Cuantas interrupciones hay ahora en toda Lima y en que distritos?", False, True),
+    # El panorama sigue al departamento activo: el boton se renombra solo.
+    (f"🌆 Panorama de {etiqueta_ambito}",
+     f"¿Cuantas interrupciones hay ahora en {etiqueta_ambito} y en que distritos?", False, True),
 ]
 accion_elegida = None
 accion_panorama = False
@@ -466,7 +481,7 @@ with col_chat:
     prompt = st.chat_input("Escribe tu consulta... (ej. 'vivo en Cerro Azul, ¿hay corte?')")
 
 if accion_elegida:
-    ejecutar_turno(accion_elegida, panorama=accion_panorama)
+    ejecutar_turno(accion_elegida, panorama=accion_panorama, departamento=dep_activo)
     # Reejecutar siempre: el semaforo y el mapa se dibujaron ANTES del turno
     # (Streamlit corre de arriba hacia abajo) y podrian quedar desfasados.
     st.rerun()
@@ -477,9 +492,10 @@ if prompt:
     import re as _re_pan
 
     es_pregunta_panorama = bool(_re_pan.search(
-        r"toda\s+lima|toda\s+la\s+ciudad|en\s+qu[eé]\s+distritos?|\bpanorama\b",
+        r"toda\s+lima|toda\s+la\s+ciudad|todo\s+el\s+departamento|"
+        r"en\s+qu[eé]\s+distritos?|\bpanorama\b",
         prompt, _re_pan.IGNORECASE))
-    ejecutar_turno(prompt, panorama=es_pregunta_panorama)
+    ejecutar_turno(prompt, panorama=es_pregunta_panorama, departamento=dep_activo)
     # chat_input devuelve None en la reejecucion, asi que no se reinvoca al agente.
     st.rerun()
 
