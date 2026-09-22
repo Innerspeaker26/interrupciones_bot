@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -27,8 +28,18 @@ from shapely.geometry import Point
 TZ_LIMA = ZoneInfo("America/Lima")
 TELEFONO = "1899"
 
-# Caja de cobertura: Lima, Callao y provincias (Canete, Huaral, Huaura, Barranca).
-BBOX = {"lat_min": -13.6, "lat_max": -10.2, "lon_min": -77.9, "lon_max": -76.0}
+# Ambito del despliegue. Se lee aqui tambien -no solo en app.py- porque decide
+# que coordenadas se aceptan: es la misma variable de entorno, el mismo proceso.
+NACIONAL = os.getenv("AMBITO", "lima").strip().lower() == "nacional"
+
+# Caja de cobertura para validar el GPS antes de tocar la base. La de Lima
+# abarca Lima, Callao y sus provincias (Canete, Huaral, Huaura, Barranca); la
+# nacional, el territorio peruano de Tumbes a Tacna y de la costa a Madre de
+# Dios. Sin esto, la app nacional rechazaria a cualquiera fuera de Lima.
+BBOX_LIMA = {"lat_min": -13.6, "lat_max": -10.2, "lon_min": -77.9, "lon_max": -76.0}
+BBOX_PERU = {"lat_min": -18.6, "lat_max": 0.2, "lon_min": -81.5, "lon_max": -68.5}
+BBOX = BBOX_PERU if NACIONAL else BBOX_LIMA
+AMBITO_TEXTO = "del Peru" if NACIONAL else "de Lima y provincias"
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 PARQUET_LIMPIO = DATA_DIR / "interrupciones_limpio.parquet"
@@ -320,7 +331,7 @@ def ubicar_por_coordenadas(lat: float, lon: float) -> str:
 
     if not (BBOX["lat_min"] <= lat <= BBOX["lat_max"] and BBOX["lon_min"] <= lon <= BBOX["lon_max"]):
         return _evidencia(
-            f"El punto ({lat}, {lon}) esta fuera de Lima y provincias. Pide al ciudadano su distrito."
+            f"El punto ({lat}, {lon}) esta fuera {AMBITO_TEXTO}. Pide al ciudadano su distrito."
         )
 
 
@@ -644,7 +655,12 @@ def construir_mapa():
     un mapa de Lima clicable para elegirla ahi mismo."""
     if "coincidencias" not in _SESSION_DATA:
         p = _SESSION_DATA.get("punto") or {}
-        m = _mapa_base(p.get("lat", -12.05), p.get("lon", -77.05), 13 if p else 10)
+        # Sin ubicacion, la vista inicial cubre el ambito entero: Lima en un
+        # despliegue, el pais en el otro. Asi el clic en el mapa sigue siendo
+        # una forma valida de ubicarse en ambos.
+        centro = (-12.05, -77.05, 10) if not NACIONAL else (-9.2, -75.0, 5)
+        m = _mapa_base(p.get("lat", centro[0]), p.get("lon", centro[1]),
+                       13 if p else centro[2])
         if p.get("lat") is not None:
             folium.Marker([p["lat"], p["lon"]],
                           tooltip="Tu ubicacion (sin interrupciones registradas)",
