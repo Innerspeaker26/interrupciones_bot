@@ -36,10 +36,27 @@ from streamlit_folium import st_folium
 #                   de departamento y con los conteos fijos en Lima y Callao.
 #   AMBITO=nacional la app de las 50 EPS: cascada departamento -> provincia ->
 #                   distrito, y contadores y panorama que siguen al ambito.
-# Se define en el .env local o en los secrets de Streamlit Cloud, asi que cada
-# despliegue elige el suyo sin tocar el codigo ni duplicar el repositorio.
+# Se define en el .env local, en los secrets de Streamlit Cloud, o -lo mas
+# comodo- arrancando por app_peru.py, que lo fija en codigo. Asi cada despliegue
+# elige el suyo sin tocar el codigo ni duplicar el repositorio.
 # --------------------------------------------------------------------------- #
-NACIONAL = os.getenv("AMBITO", "lima").strip().lower() == "nacional"
+def _leer_ambito() -> str:
+    """El ambito puede llegar por variable de entorno o por los secrets de
+    Streamlit Cloud, que no siempre los expone como variables. Se deja
+    normalizado en os.environ porque tools.py tambien lo necesita: de el
+    depende el recuadro de coordenadas que acepta el GPS."""
+    valor = os.getenv("AMBITO", "")
+    if not valor:
+        try:
+            valor = str(st.secrets.get("AMBITO", ""))
+        except Exception:  # noqa: BLE001  (sin secrets configurados)
+            valor = ""
+    valor = (valor or "lima").strip().lower()
+    os.environ["AMBITO"] = valor
+    return valor
+
+
+NACIONAL = _leer_ambito() == "nacional"
 TITULO = ("GeoAgente de interrupciones de agua — Perú" if NACIONAL
           else "GeoAgente de interrupciones de agua — Lima")
 

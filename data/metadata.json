@@ -1,13 +1,13 @@
 {
-  "generado": "22/09/2026 17:24",
-  "archivo_origen": "interrupciones_semaforo_260922_1724.gdb",
+  "generado": "22/09/2026 17:39",
+  "archivo_origen": "interrupciones_semaforo_260922_1739.gdb",
   "flag_utc": true,
-  "registros_crudos": 1878,
-  "registros": 1878,
-  "interrupciones": 1183,
-  "con_geometria": 1822,
+  "registros_crudos": 1879,
+  "registros": 1879,
+  "interrupciones": 1184,
+  "con_geometria": 1823,
   "provincias": 64,
-  "distritos": 183,
+  "distritos": 184,
   "control_cerro_azul": null,
   "zona_horaria_ok": null
 }
