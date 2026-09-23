@@ -16,6 +16,7 @@ import difflib
 import json
 import os
 import re
+import threading
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -54,27 +55,50 @@ URL_BASE_DRIVE = f"https://drive.google.com/uc?export=download&id={DRIVE_FILE_ID
 TTL_BASE_SEG = 15 * 60          # mismo ritmo que la tarea programada
 
 # --------------------------------------------------------------------------- #
-# Estado compartido
-#   _BASE_CACHE: el parquet cargado + cuando se cargo (se refresca por TTL).
-#   _SESSION_DATA: lo propio de la consulta actual — punto ubicado, filas
-#   coincidentes y la evidencia contra la que verifican los guardarrailes.
+# Estado
+#   _BASE_CACHE: el parquet cargado + cuando se cargo. Se comparte a proposito:
+#   la base es la misma para todos y ocupa memoria.
+#   _SESIONES: lo propio de CADA consulta -punto ubicado, filas coincidentes y
+#   la evidencia que verifican los guardarrailes-, separado por sesion.
+#
+# Por que separado: Streamlit atiende a cada visitante en un hilo distinto del
+# MISMO proceso. Con un unico diccionario global, quien se ubicaba despues
+# pisaba las filas del anterior, y a este le respondian sobre otro distrito o
+# le decian que no habia cortes cuando si los tenia. Cada sesion escribe ahora
+# en su propio espacio, identificado por el thread_id que la app ya generaba.
 # --------------------------------------------------------------------------- #
 _BASE_CACHE: dict = {}
-_SESSION_DATA: dict = {}
+_SESIONES: dict[str, dict] = {}
+_HILO = threading.local()
+MAX_SESIONES = 50          # tope de memoria; se descarta la menos reciente
+
+
+def usar_sesion(clave: str) -> None:
+    """Asocia este hilo a una sesion. La app la llama al inicio de cada
+    reejecucion con su thread_id; sin ella todo cae en un espacio comun, que
+    es lo correcto para la consola y las pruebas."""
+    _HILO.clave = clave
+    _SESIONES[clave] = _SESIONES.pop(clave, {})   # reinsertar = marcar en uso
+    while len(_SESIONES) > MAX_SESIONES:
+        _SESIONES.pop(next(iter(_SESIONES)))
+
+
+def _datos() -> dict:
+    return _SESIONES.setdefault(getattr(_HILO, "clave", "_sin_sesion"), {})
 
 
 def get_session_data() -> dict:
-    return _SESSION_DATA
+    return _datos()
 
 
 def clear_session_data() -> None:
-    _SESSION_DATA.clear()
+    _datos().clear()
 
 
 def _evidencia(texto: str) -> str:
     """Registra lo que devolvio una tool. Es la unica forma de que los
     guardarrailes distingan un dato real de uno inventado por el modelo."""
-    _SESSION_DATA.setdefault("evidencia", []).append(texto)
+    _datos().setdefault("evidencia", []).append(texto)
     return texto
 
 
@@ -272,11 +296,11 @@ def _guardar(hits: pd.DataFrame, etiqueta: str, punto: dict | None = None) -> st
     guardar un vacio haria que las tools de detalle digan "no hay cortes" cuando
     en realidad nunca se ubico a la persona."""
     if hits is None or hits.empty:
-        _SESSION_DATA.pop("coincidencias", None)
+        _datos().pop("coincidencias", None)
         return _evidencia(f"{etiqueta}. No hay registros de interrupciones para esa ubicacion.")
-    _SESSION_DATA["coincidencias"] = hits
+    _datos()["coincidencias"] = hits
     if punto:
-        _SESSION_DATA["punto"] = punto
+        _datos()["punto"] = punto
     # El primer numero es el que decide el semaforo de la app: cuenta TODO lo
     # que deja sin agua ahora, imprevisto o programado ya iniciado.
     n_impr = _n_int(_activas_ahora(hits))
@@ -327,7 +351,7 @@ def ubicar_por_coordenadas(lat: float, lon: float) -> str:
     """
     # El punto se guarda siempre: es lo que el mapa usa para centrarse, aunque
     # el clic caiga en una zona sin interrupciones registradas.
-    _SESSION_DATA["punto"] = {"lat": lat, "lon": lon, "etiqueta": ""}
+    _datos()["punto"] = {"lat": lat, "lon": lon, "etiqueta": ""}
 
     if not (BBOX["lat_min"] <= lat <= BBOX["lat_max"] and BBOX["lon_min"] <= lon <= BBOX["lon_max"]):
         return _evidencia(
@@ -406,9 +430,9 @@ def interrupciones_imprevistas() -> str:
     distinguiendo las imprevistas de las programadas que ya empezaron.
     Devuelve causa, inicio, restablecimiento estimado y acciones de la empresa.
     """
-    if "coincidencias" not in _SESSION_DATA:
+    if "coincidencias" not in _datos():
         return "Primero ubica al ciudadano con ubicar_por_coordenadas o ubicar_por_distrito."
-    hits = _SESSION_DATA["coincidencias"]
+    hits = _datos()["coincidencias"]
     act, curso = _activas_ahora(hits), _programadas_en_curso(hits)
     if act.empty and curso.empty:
         return _evidencia("No hay ninguna interrupcion cortando el servicio en tu zona en este momento.")
@@ -447,9 +471,9 @@ def interrupciones_programadas() -> str:
     curso ahora mismo y luego las que aun no empiezan, hasta fin de mes.
     Devuelve dia y hora de inicio, fin estimado y causa.
     """
-    if "coincidencias" not in _SESSION_DATA:
+    if "coincidencias" not in _datos():
         return "Primero ubica al ciudadano con ubicar_por_coordenadas o ubicar_por_distrito."
-    hits = _SESSION_DATA["coincidencias"]
+    hits = _datos()["coincidencias"]
     curso, prog = _programadas_en_curso(hits), _programadas_resto_mes(hits)
     if curso.empty and prog.empty:
         return _evidencia("No hay interrupciones programadas en curso ni por empezar "
@@ -488,9 +512,9 @@ def verificar_cisternas() -> str:
     Revisa si las interrupciones vigentes de la zona ya ubicada mencionan
     abastecimiento con camiones cisterna.
     """
-    if "coincidencias" not in _SESSION_DATA:
+    if "coincidencias" not in _datos():
         return "Primero ubica al ciudadano con ubicar_por_coordenadas o ubicar_por_distrito."
-    df = _SESSION_DATA["coincidencias"]
+    df = _datos()["coincidencias"]
     # _en_curso cubre imprevistas y programadas ya iniciadas; el otro filtro, las
     # programadas por empezar. Sin solaparse (inicio <= ahora vs inicio >= ahora).
     vigentes = _una_por_int(pd.concat([_en_curso(df), _programadas_resto_mes(df)]))
@@ -653,8 +677,8 @@ def _mapa_base(lat: float, lon: float, zoom: int):
 def construir_mapa():
     """Rojo: imprevistas activas. Naranja: programadas del mes. Sin ubicacion,
     un mapa de Lima clicable para elegirla ahi mismo."""
-    if "coincidencias" not in _SESSION_DATA:
-        p = _SESSION_DATA.get("punto") or {}
+    if "coincidencias" not in _datos():
+        p = _datos().get("punto") or {}
         # Sin ubicacion, la vista inicial cubre el ambito entero: Lima en un
         # despliegue, el pais en el otro. Asi el clic en el mapa sigue siendo
         # una forma valida de ubicarse en ambos.
@@ -667,9 +691,9 @@ def construir_mapa():
                           icon=folium.Icon(color="gray", icon="tint", prefix="fa")).add_to(m)
         return m
 
-    hits = _SESSION_DATA["coincidencias"]
+    hits = _datos()["coincidencias"]
     hits = hits[hits.geometry.notna()]
-    punto = _SESSION_DATA.get("punto") or {}
+    punto = _datos().get("punto") or {}
     lat, lon = punto.get("lat", -12.0464), punto.get("lon", -77.0428)
     m = _mapa_base(lat, lon, 13)
 
@@ -709,7 +733,7 @@ def departamento_ubicado() -> str:
     """Departamento de la ubicacion ya resuelta, si la hay. Permite que el
     panorama y los contadores sigan a donde esta el ciudadano, no al
     desplegable."""
-    hits = _SESSION_DATA.get("coincidencias")
+    hits = _datos().get("coincidencias")
     if hits is None or hits.empty or "dep_norm" not in hits.columns:
         return ""
     modas = hits["dep_norm"].mode()

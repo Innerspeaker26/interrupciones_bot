@@ -176,6 +176,7 @@ from tools import (  # noqa: E402  (despues del st.stop para no fallar dos veces
     listar_provincias,
     ubicar_por_coordenadas,
     ubicar_por_distrito,
+    usar_sesion,
 )
 
 # --------------------------------------------------------------------------- #
@@ -189,6 +190,12 @@ if "ubicacion" not in st.session_state:
     st.session_state.ubicacion = None      # {"lat","lon"} o {"distrito","provincia"}
 if "ubicacion_respondida" not in st.session_state:
     st.session_state.ubicacion_respondida = None
+
+# Aisla en tools.py las filas y la evidencia de ESTA sesion. Sin esto, dos
+# visitantes simultaneos comparten el mismo estado y el segundo en ubicarse
+# pisa al primero: al primero le responden sobre otro distrito, o le dicen
+# que no hay cortes cuando si los tiene. Va antes de cualquier uso de tools.
+usar_sesion(st.session_state.thread_id)
 
 
 # --------------------------------------------------------------------------- #
